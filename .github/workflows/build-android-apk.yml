@@ -1,0 +1,102 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-android-apk:
+    name: Build FLOW Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+
+      - name: Verify Android SDK & accept licenses
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+          yes | sdkmanager --licenses >/dev/null || true
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --legacy-peer-deps --no-audit --no-fund
+          else
+            npm install --legacy-peer-deps --no-audit --no-fund
+          fi
+
+      - name: Build web assets
+        run: npm run build
+
+      - name: Initialize & sync Capacitor Android project
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          npx cap sync android
+
+      - name: Configure AndroidManifest for fullscreen landscape WebGL gameplay
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          node -e '
+            const fs = require("fs");
+            const file = process.argv[1];
+            let xml = fs.readFileSync(file, "utf8");
+            if (!xml.includes("android:hardwareAccelerated")) {
+              xml = xml.replace("<application", "<application android:hardwareAccelerated=\"true\"");
+            }
+            if (!xml.includes("android:screenOrientation")) {
+              xml = xml.replace("<activity", "<activity android:screenOrientation=\"sensorLandscape\"");
+            }
+            fs.writeFileSync(file, xml, "utf8");
+          ' "$MANIFEST"
+
+      - name: Copy app icon assets into Android mipmap resources
+        run: |
+          ICON_SRC="public/pwa-512x512.png"
+          FG_SRC="public/pwa-maskable-512x512.png"
+          if [ ! -f "$FG_SRC" ]; then
+            FG_SRC="$ICON_SRC"
+          fi
+          if [ -f "$ICON_SRC" ]; then
+            for dir in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+              mkdir -p "android/app/src/main/res/$dir"
+              cp "$ICON_SRC" "android/app/src/main/res/$dir/ic_launcher.png"
+              cp "$ICON_SRC" "android/app/src/main/res/$dir/ic_launcher_round.png"
+              cp "$FG_SRC" "android/app/src/main/res/$dir/ic_launcher_foreground.png"
+            done
+          fi
+
+      - name: Build Android Debug APK (installable directly)
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload FLOW Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FLOW-Android-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30

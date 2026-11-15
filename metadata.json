@@ -1,0 +1,8 @@
+{
+  "name": "FLOW",
+  "description": "A cinematic 3D surfing game featuring real-time ocean waves, tropical coastal environments, and minimalist design.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
