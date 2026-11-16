@@ -7,7 +7,8 @@ export type MenuScreen =
   | 'lineup'
   | 'surfing'
   | 'career'
-  | 'careerCreate';
+  | 'careerCreate'
+  | 'interview';
 
 export type CameraMode = 'thirdPerson' | 'firstPerson';
 
@@ -214,5 +215,15 @@ export interface SurfHUDState {
   cutsceneActive: boolean;
   cutsceneStage: number; // 0 if inactive, 1..6 during pre-heat cutscene
   cutsceneProgress: number; // 0..1
+  victoryCutsceneActive: boolean;
+  victoryCutsceneKind:
+    | 'heat_win'
+    | 'quarterfinal_win'
+    | 'semifinal_win'
+    | 'final_win'
+    | 'championship_ceremony'
+    | null;
+  victoryCutsceneStage: number;
+  victoryCutsceneProgress: number; // 0..1
   replay: ReplayHUDState;
 }

@@ -1,3 +1,4 @@
+import { VictoryCutsceneKind } from '../types/career';
 import { ExecutionQuality, ManeuverType } from '../types/game';
 
 class OceanAudioEngine {
@@ -842,6 +843,181 @@ class OceanAudioEngine {
       gain.connect(this.sfxGain);
       osc.start(now);
       osc.stop(now + 0.7);
+    }
+  }
+
+  /**
+   * Procedural musical fanfares, warm harmonic chords, and coastal crowd cheer swells
+   * for each stage of the 5 cinematic victory cutscenes.
+   */
+  public playVictoryCutsceneCue(kind: VictoryCutsceneKind, stage: number) {
+    if (!this.ready() || !this.ctx || !this.noiseBuffer || !this.sfxGain) return;
+    const now = this.ctx.currentTime;
+    const sfx = this.sfxGain;
+    const ctx = this.ctx;
+
+    const playArpNote = (freq: number, delay: number, dur: number, vol: number, wave: OscillatorType = 'triangle') => {
+      const t0 = now + delay;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = wave;
+      osc.frequency.setValueAtTime(freq, t0);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.linearRampToValueAtTime(vol, t0 + 0.035);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(g);
+      g.connect(sfx);
+      osc.start(t0);
+      osc.stop(t0 + dur + 0.05);
+    };
+
+    const playCrowdWash = (delay: number, dur: number, vol: number, centerHz = 820) => {
+      if (!this.noiseBuffer) return;
+      const t0 = now + delay;
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      src.loop = true;
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(centerHz * 0.75, t0);
+      filter.frequency.linearRampToValueAtTime(centerHz * 1.15, t0 + dur * 0.4);
+      filter.frequency.exponentialRampToValueAtTime(centerHz * 0.65, t0 + dur);
+      filter.Q.value = 0.9;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.linearRampToValueAtTime(vol, t0 + dur * 0.25);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      src.connect(filter);
+      filter.connect(g);
+      g.connect(sfx);
+      src.start(t0, Math.random() * 2.0);
+      src.stop(t0 + dur + 0.06);
+    };
+
+    if (kind === 'heat_win') {
+      if (stage === 1) {
+        // Bright major triad rising chime
+        [392.0, 493.88, 587.33, 783.99].forEach((f, idx) => {
+          playArpNote(f, idx * 0.09, 0.95, 0.065, 'triangle');
+        });
+        playCrowdWash(0.1, 1.4, 0.08, 720);
+      } else {
+        playArpNote(587.33, 0, 1.1, 0.04, 'sine');
+        playArpNote(783.99, 0.08, 1.1, 0.04, 'sine');
+      }
+    } else if (kind === 'quarterfinal_win') {
+      if (stage === 1) {
+        [329.63, 415.3, 493.88, 659.25].forEach((f, idx) => {
+          playArpNote(f, idx * 0.09, 1.1, 0.065, 'triangle');
+        });
+        playCrowdWash(0.05, 1.5, 0.09, 760);
+      } else if (stage === 2) {
+        playArpNote(493.88, 0, 1.25, 0.05, 'sine');
+        playArpNote(659.25, 0.06, 1.35, 0.055, 'triangle');
+      }
+    } else if (kind === 'semifinal_win') {
+      if (stage === 1) {
+        // Energetic rising fanfare + beach crowd cheer swell
+        [293.66, 369.99, 440.0, 587.33, 739.99].forEach((f, idx) => {
+          playArpNote(f, idx * 0.085, 1.25, 0.072, 'triangle');
+        });
+        playCrowdWash(0.05, 1.9, 0.13, 880);
+      } else if (stage === 2) {
+        [440.0, 554.37, 659.25, 880.0].forEach((f, idx) => {
+          playArpNote(f, idx * 0.07, 1.4, 0.058, 'triangle');
+        });
+      } else {
+        playArpNote(587.33, 0, 1.5, 0.055, 'sine');
+        playArpNote(880.0, 0.08, 1.6, 0.06, 'sine');
+      }
+    } else if (kind === 'final_win') {
+      if (stage === 1) {
+        // Dramatic post-wave crescendo chord
+        [261.63, 329.63, 392.0, 523.25].forEach((f) => {
+          playArpNote(f, 0.05, 2.0, 0.055, 'triangle');
+        });
+        playCrowdWash(0.1, 2.0, 0.12, 820);
+      } else if (stage === 2) {
+        // Full "CAMPEÃO!" triumphant brass-like arpeggio
+        [261.63, 329.63, 392.0, 493.88, 523.25, 659.25, 783.99].forEach((f, idx) => {
+          playArpNote(f, idx * 0.075, 1.85, 0.072, idx % 2 === 0 ? 'triangle' : 'sine');
+        });
+        playCrowdWash(0.05, 2.4, 0.16, 940);
+      } else {
+        playArpNote(523.25, 0, 1.9, 0.05, 'sine');
+        playArpNote(659.25, 0.05, 1.9, 0.05, 'sine');
+        playArpNote(783.99, 0.1, 1.9, 0.05, 'sine');
+      }
+    } else if (kind === 'championship_ceremony') {
+      if (stage === 1) {
+        // Golden podium reveal harmonic swell + applause texture
+        [220.0, 277.18, 329.63, 440.0, 554.37, 659.25].forEach((f, idx) => {
+          playArpNote(f, idx * 0.09, 2.2, 0.062, 'triangle');
+        });
+        playCrowdWash(0.15, 2.5, 0.14, 960);
+      } else if (stage === 2) {
+        // Championship Trophy shimmer & major 9th chord
+        [329.63, 440.0, 554.37, 659.25, 830.61, 987.77].forEach((f, idx) => {
+          playArpNote(f, idx * 0.08, 2.1, 0.058, 'sine');
+        });
+        playCrowdWash(0.05, 2.2, 0.12, 920);
+      } else {
+        playArpNote(440.0, 0, 2.1, 0.045, 'triangle');
+        playArpNote(659.25, 0.06, 2.1, 0.048, 'sine');
+        playArpNote(880.0, 0.12, 2.2, 0.045, 'sine');
+      }
+    }
+  }
+
+  /**
+   * Subtle broadcast press zone chimes and tone-matched audio feedback
+   * for post-competition interviews.
+   */
+  public playInterviewCue(
+    cue: 'open' | 'select_humildade' | 'select_confianca' | 'select_provocacao' | 'skip'
+  ) {
+    if (!this.ready() || !this.ctx || !this.sfxGain) return;
+    const now = this.ctx.currentTime;
+    const ctx = this.ctx;
+    const sfx = this.sfxGain;
+
+    const note = (freq: number, delay: number, dur: number, vol: number, wave: OscillatorType = 'sine') => {
+      const t0 = now + delay;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = wave;
+      osc.frequency.setValueAtTime(freq, t0);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.linearRampToValueAtTime(vol, t0 + 0.025);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      osc.connect(g);
+      g.connect(sfx);
+      osc.start(t0);
+      osc.stop(t0 + dur + 0.04);
+    };
+
+    if (cue === 'open') {
+      // Crisp broadcast live-mic chime
+      note(440.0, 0.0, 0.35, 0.042, 'sine');
+      note(554.37, 0.08, 0.48, 0.045, 'triangle');
+      note(659.25, 0.16, 0.65, 0.04, 'sine');
+    } else if (cue === 'select_humildade') {
+      // Warm resolved acoustic chord
+      note(392.0, 0.0, 0.55, 0.045, 'sine');
+      note(493.88, 0.06, 0.6, 0.042, 'sine');
+      note(587.33, 0.12, 0.72, 0.04, 'triangle');
+    } else if (cue === 'select_confianca') {
+      // Confident rising fifths
+      note(440.0, 0.0, 0.45, 0.048, 'triangle');
+      note(659.25, 0.07, 0.65, 0.05, 'triangle');
+      note(880.0, 0.15, 0.72, 0.042, 'sine');
+    } else if (cue === 'select_provocacao') {
+      // Bold punchy stinger
+      note(329.63, 0.0, 0.36, 0.055, 'sawtooth');
+      note(493.88, 0.06, 0.48, 0.048, 'triangle');
+      note(622.25, 0.13, 0.58, 0.042, 'triangle');
+    } else {
+      note(369.99, 0.0, 0.22, 0.032, 'sine');
     }
   }
 

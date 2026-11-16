@@ -358,6 +358,65 @@ export interface CareerSaveState {
   titlesWon?: CareerTitleRecord[];
   maxSequenceInCareer?: number;
   longestBarrelInCareer?: number;
+  sponsorAffinity?: number;
+  interviewHistory?: CareerInterviewRecord[];
+  recentInterviewQuestionIds?: string[];
+}
+
+export type InterviewTriggerKind =
+  | 'championship_win'
+  | 'perfect_ten'
+  | 'grand_final_qualified'
+  | 'important_win'
+  | 'important_defeat';
+
+export type InterviewTone = 'humildade' | 'confianca' | 'provocacao';
+
+export interface InterviewChoice {
+  id: string;
+  tone: InterviewTone;
+  text: string;
+  reactionQuote: string;
+  reputationDelta: number;
+  sponsorAffinityDelta: number;
+  rivalryIntensityDelta?: number;
+  consequenceLabel: string;
+}
+
+export interface InterviewPrompt {
+  id: string;
+  questionId: string;
+  trigger: InterviewTriggerKind;
+  triggerBadge: string;
+  eventId: string;
+  eventName: string;
+  beachName: string;
+  roundLabel: string;
+  season: number;
+  journalistName: string;
+  mediaOutlet: string;
+  question: string;
+  contextLine: string;
+  choices: [InterviewChoice, InterviewChoice, InterviewChoice];
+  seed: number;
+}
+
+export interface CareerInterviewRecord {
+  id: string;
+  season: number;
+  eventName: string;
+  beachName: string;
+  roundLabel: string;
+  trigger: InterviewTriggerKind;
+  triggerBadge: string;
+  journalistName: string;
+  question: string;
+  answerText: string;
+  tone: InterviewTone;
+  reputationDelta: number;
+  sponsorAffinityDelta: number;
+  consequenceSummary: string;
+  timestamp: string;
 }
 
 export interface LiveCareerHeatHUD {
@@ -415,4 +474,48 @@ export interface CareerCutsceneInfo {
     stance: 'Regular' | 'Goofy';
     isH2HRival?: boolean;
   }>;
+}
+
+export type VictoryCutsceneKind =
+  | 'heat_win'
+  | 'quarterfinal_win'
+  | 'semifinal_win'
+  | 'final_win'
+  | 'championship_ceremony';
+
+export interface VictoryCutsceneCompetitorResult {
+  id: string;
+  name: string;
+  nationalityCode: string;
+  isPlayer: boolean;
+  bestTwoTotal: number;
+  bestWave: number;
+  heatRank: number;
+  advanced: boolean;
+  accentColor: string;
+}
+
+export interface VictoryCutsceneInfo {
+  kind: VictoryCutsceneKind;
+  key: string;
+  eventName: string;
+  beachName: string;
+  location: string;
+  roundLabel: string;
+  season: number;
+  tierName: string;
+  playerName: string;
+  playerNationalityCode: string;
+  playerScoreTotal: number;
+  playerBestWave: number;
+  playerHeatRank: number;
+  placementLabel: string;
+  championshipTitle?: string;
+  nextStageLabel?: string;
+  isWorldTitle?: boolean;
+  isDivisionTitle?: boolean;
+  prizeWon?: number;
+  pointsEarned?: number;
+  competitors: VictoryCutsceneCompetitorResult[];
+  seed: number;
 }

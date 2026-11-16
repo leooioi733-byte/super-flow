@@ -354,8 +354,8 @@ export const GameplayHUD: React.FC<GameplayHUDProps> = React.memo(({
           ? 'text-[#f2a679]'
           : 'text-[#E7DCC8]';
 
-  // --- PRE-HEAT CUTSCENE TAKES OVER HUD CLEANLY ---
-  if (hud.cutsceneActive) {
+  // --- PRE-HEAT & VICTORY CUTSCENES TAKE OVER HUD CLEANLY ---
+  if (hud.cutsceneActive || hud.victoryCutsceneActive) {
     return null;
   }
 

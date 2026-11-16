@@ -10,6 +10,7 @@ import {
   TIER_EVENT_TEMPLATES,
   TIER_MAP,
 } from '../data/careerData';
+import { selectInterviewPromptForContext } from '../data/interviewData';
 import { BEACH_SPOTS, SURFBOARDS } from '../data/surfData';
 import {
   ActiveTournamentState,
@@ -17,6 +18,7 @@ import {
   CareerCutsceneInfo,
   CareerEvent,
   CareerEventResult,
+  CareerInterviewRecord,
   CareerObjective,
   CareerSaveState,
   CareerSurferCustomization,
@@ -26,6 +28,9 @@ import {
   HeatMatch,
   HeatRoundType,
   HeatWaveRecord,
+  InterviewChoice,
+  InterviewPrompt,
+  InterviewTriggerKind,
   LiveCareerHeatHUD,
   RivalryNotification,
   RivalryRecord,
@@ -34,6 +39,7 @@ import {
   SponsorBrand,
   SponsorContract,
   TournamentMilestoneSummary,
+  VictoryCutsceneInfo,
 } from '../types/career';
 import { CareerHeatNpcSpec } from '../three/npcSurferSystem';
 import { CompletedWaveTelemetry, SurferProfile } from '../types/game';
@@ -122,6 +128,12 @@ function migrateCareerSave(parsed: CareerSaveState): CareerSaveState {
     titlesWon,
     maxSequenceInCareer: parsed.maxSequenceInCareer ?? 0,
     longestBarrelInCareer: parsed.longestBarrelInCareer ?? 0,
+    sponsorAffinity:
+      typeof parsed.sponsorAffinity === 'number' ? Math.max(0, Math.min(100, parsed.sponsorAffinity)) : 55,
+    interviewHistory: Array.isArray(parsed.interviewHistory) ? parsed.interviewHistory : [],
+    recentInterviewQuestionIds: Array.isArray(parsed.recentInterviewQuestionIds)
+      ? parsed.recentInterviewQuestionIds
+      : [],
   };
 }
 
@@ -296,6 +308,9 @@ export function createNewCareer(
     titlesWon: [],
     maxSequenceInCareer: 0,
     longestBarrelInCareer: 0,
+    sponsorAffinity: 55,
+    interviewHistory: [],
+    recentInterviewQuestionIds: [],
   };
 
   saveCareerState(state);
@@ -2264,5 +2279,355 @@ export function buildCareerHeatNpcSpecs(career: CareerSaveState): CareerHeatNpcS
       };
     });
 }
+
+export function buildVictoryCutsceneSequence(
+  updatedCareer: CareerSaveState,
+  finishedRound: HeatRoundType
+): VictoryCutsceneInfo[] {
+  const t = updatedCareer.activeTournament;
+  if (!t) return [];
+  const event = updatedCareer.calendar.find((e) => e.id === t.eventId);
+  if (!event) return [];
+
+  const roundEntry = [...t.completedRounds]
+    .reverse()
+    .find((r) => r.round === finishedRound);
+  const playerHeat =
+    roundEntry?.heats.find((h) => h.competitors.some((c) => c.isPlayer)) ??
+    t.heats[t.playerHeatIndex];
+  if (!playerHeat) return [];
+
+  const playerComp = playerHeat.competitors.find((c) => c.isPlayer);
+  if (!playerComp) return [];
+
+  const beach = BEACH_SPOTS.find((b) => b.id === event.beachId);
+  const tierInfo = TIER_MAP[updatedCareer.tier];
+  const baseKey = `${updatedCareer.season}:${event.id}:${finishedRound}:${playerHeat.heatId}`;
+  const seed = hashSeedString(baseKey);
+
+  const getCompetitorBestWave = (waves: HeatWaveRecord[]): number =>
+    waves.length > 0 ? Math.max(...waves.map((w) => w.score)) : 0;
+
+  const competitors = playerHeat.competitors.map((c) => ({
+    id: c.id,
+    name: c.name,
+    nationalityCode: c.nationalityCode,
+    isPlayer: c.isPlayer,
+    bestTwoTotal: c.bestTwoTotal,
+    bestWave: getCompetitorBestWave(c.waves),
+    heatRank: c.heatRank,
+    advanced: c.advanced,
+    accentColor: c.accentColor,
+  }));
+
+  const common = {
+    eventName: event.name,
+    beachName: beach?.name ?? event.location,
+    location: event.location,
+    roundLabel: roundEntry?.roundLabel ?? t.roundLabel,
+    season: updatedCareer.season,
+    tierName: tierInfo.name,
+    playerName: updatedCareer.surfer.name,
+    playerNationalityCode: updatedCareer.surfer.nationalityCode,
+    playerScoreTotal: playerComp.bestTwoTotal,
+    playerBestWave: getCompetitorBestWave(playerComp.waves),
+    playerHeatRank: playerComp.heatRank,
+    competitors,
+    seed,
+  };
+
+  if (finishedRound === 'final') {
+    const wonFinal =
+      playerComp.heatRank === 1 || t.finalResult?.placement === 1;
+    if (!wonFinal) return [];
+
+    const seasonSummary = updatedCareer.pendingSeasonSummary;
+    const isWorldTitle = Boolean(seasonSummary?.wonWorldTitle);
+    const isDivisionTitle = Boolean(
+      seasonSummary && seasonSummary.finalRank === 1 && !seasonSummary.wonWorldTitle
+    );
+    const championshipTitle = isWorldTitle
+      ? `Campeão Mundial FLOW · Temporada ${updatedCareer.season}`
+      : isDivisionTitle
+        ? `Campeão · ${tierInfo.name}`
+        : event.name;
+
+    const totalPrizeWon =
+      (t.finalResult?.prizeEarned ?? 0) + (t.finalResult?.sponsorBonusEarned ?? 0);
+
+    return [
+      {
+        ...common,
+        kind: 'final_win',
+        key: `${baseKey}:final_win:${seed}`,
+        placementLabel: '1º Lugar · Campeão',
+        championshipTitle: event.name,
+        prizeWon: totalPrizeWon,
+        pointsEarned: t.finalResult?.pointsEarned,
+      },
+      {
+        ...common,
+        kind: 'championship_ceremony',
+        key: `${baseKey}:ceremony:${seed}`,
+        placementLabel: '1º Lugar · Campeão',
+        championshipTitle,
+        isWorldTitle,
+        isDivisionTitle,
+        prizeWon: totalPrizeWon,
+        pointsEarned: t.finalResult?.pointsEarned,
+      },
+    ];
+  }
+
+  if (finishedRound === 'semifinal') {
+    if (!playerComp.advanced) return [];
+    return [
+      {
+        ...common,
+        kind: 'semifinal_win',
+        key: `${baseKey}:semifinal_win:${seed}`,
+        placementLabel: `${playerComp.heatRank}º Lugar · Classificado`,
+        nextStageLabel: 'Grande Final',
+      },
+    ];
+  }
+
+  if (finishedRound === 'quartas') {
+    if (!playerComp.advanced) return [];
+    return [
+      {
+        ...common,
+        kind: 'quarterfinal_win',
+        key: `${baseKey}:quarterfinal_win:${seed}`,
+        placementLabel: `${playerComp.heatRank}º Lugar · Classificado`,
+        nextStageLabel: 'Semifinal',
+      },
+    ];
+  }
+
+  if (playerComp.heatRank === 1 || playerComp.advanced) {
+    return [
+      {
+        ...common,
+        kind: 'heat_win',
+        key: `${baseKey}:heat_win:${seed}`,
+        placementLabel: `${playerComp.heatRank}º Lugar · Vitória`,
+      },
+    ];
+  }
+
+  return [];
+}
+
+export function getSponsorRelationshipStatus(affinity = 55): {
+  label: string;
+  tierColor: string;
+  summary: string;
+} {
+  if (affinity >= 80) {
+    return {
+      label: 'Aliança de Elite',
+      tierColor: 'text-[#38d9c8]',
+      summary: 'Marcas disputam sua assinatura após declarações exemplares.',
+    };
+  }
+  if (affinity >= 62) {
+    return {
+      label: 'Boa Imagem Pública',
+      tierColor: 'text-[#f4c97a]',
+      summary: 'Patrocinadores confiam na sua postura diante das câmeras.',
+    };
+  }
+  if (affinity >= 40) {
+    return {
+      label: 'Relação Equilibrada',
+      tierColor: 'text-white/85',
+      summary: 'Sua postura na imprensa mantém portas abertas no circuito.',
+    };
+  }
+  return {
+    label: 'Sob Atenção Comercial',
+    tierColor: 'text-[#e68a5c]',
+    summary: 'Declarações polêmicas exigem resultados sólidos e postura equilibrada.',
+  };
+}
+
+export function evaluatePostHeatInterviewTrigger(
+  updatedCareer: CareerSaveState,
+  finishedRound: HeatRoundType,
+  playerWaves: HeatWaveRecord[]
+): InterviewPrompt | null {
+  const t = updatedCareer.activeTournament;
+  if (!t) return null;
+  const event = updatedCareer.calendar.find((e) => e.id === t.eventId);
+  if (!event) return null;
+
+  const roundEntry = [...t.completedRounds]
+    .reverse()
+    .find((r) => r.round === finishedRound);
+  const playerHeat =
+    roundEntry?.heats.find((h) => h.competitors.some((c) => c.isPlayer)) ??
+    t.heats[t.playerHeatIndex];
+  if (!playerHeat) return null;
+
+  const playerComp = playerHeat.competitors.find((c) => c.isPlayer);
+  if (!playerComp) return null;
+
+  const bestWave = Math.max(
+    0,
+    ...playerWaves.map((w) => w.score),
+    ...playerComp.waves.map((w) => w.score)
+  );
+  const wonChampionship =
+    finishedRound === 'final' &&
+    (playerComp.heatRank === 1 || t.finalResult?.placement === 1);
+  const hasPerfectTen = bestWave >= 9.95;
+  const qualifiedGrandFinal =
+    finishedRound === 'semifinal' && playerComp.advanced;
+  const hadH2HRival = Boolean(
+    t.headToHeadRivalId &&
+      playerHeat.competitors.some((c) => !c.isPlayer && c.id === t.headToHeadRivalId)
+  );
+
+  const importantDefeat =
+    (finishedRound === 'final' && !wonChampionship) ||
+    (finishedRound === 'semifinal' && !playerComp.advanced) ||
+    (finishedRound === 'quartas' && !playerComp.advanced) ||
+    (!playerComp.advanced && hadH2HRival);
+
+  const importantWin =
+    (finishedRound === 'quartas' && playerComp.advanced) ||
+    ((playerComp.heatRank === 1 || playerComp.advanced) &&
+      (hadH2HRival || playerComp.bestTwoTotal >= 12.0));
+
+  let trigger: InterviewTriggerKind | null = null;
+  if (wonChampionship) {
+    trigger = 'championship_win';
+  } else if (hasPerfectTen) {
+    trigger = 'perfect_ten';
+  } else if (qualifiedGrandFinal) {
+    trigger = 'grand_final_qualified';
+  } else if (importantDefeat) {
+    trigger = 'important_defeat';
+  } else if (importantWin) {
+    trigger = 'important_win';
+  }
+
+  if (!trigger) return null;
+
+  const nonPlayerSorted = playerHeat.competitors
+    .filter((c) => !c.isPlayer)
+    .sort((a, b) => a.heatRank - b.heatRank);
+  const featuredRival =
+    (t.headToHeadRivalId
+      ? nonPlayerSorted.find((c) => c.id === t.headToHeadRivalId)
+      : undefined) ?? nonPlayerSorted[0];
+
+  const activeContract = updatedCareer.sponsors.find((s) => s.status === 'active');
+  const activeBrand = activeContract
+    ? SPONSOR_BRANDS.find((b) => b.id === activeContract.brandId)
+    : undefined;
+
+  const beach = BEACH_SPOTS.find((b) => b.id === event.beachId);
+  const tierInfo = TIER_MAP[updatedCareer.tier];
+  const seed = hashSeedString(
+    `${updatedCareer.season}:${event.id}:${finishedRound}:${playerHeat.heatId}:${trigger}:${updatedCareer.interviewHistory?.length ?? 0}`
+  );
+
+  return selectInterviewPromptForContext(
+    trigger,
+    {
+      eventId: event.id,
+      eventName: event.name,
+      beachName: beach?.name ?? event.location,
+      roundLabel: roundEntry?.roundLabel ?? t.roundLabel,
+      season: updatedCareer.season,
+      tierName: tierInfo.shortName,
+      playerName: updatedCareer.surfer.name,
+      bestWave,
+      heatTotal: playerComp.bestTwoTotal,
+      playerRank: playerComp.heatRank,
+      rivalName: featuredRival?.name ?? 'os principais rivais',
+      activeSponsorName: activeBrand?.name ?? null,
+      isWorldTitle: Boolean(updatedCareer.pendingSeasonSummary?.wonWorldTitle),
+      seed,
+    },
+    updatedCareer.recentInterviewQuestionIds ?? []
+  );
+}
+
+export function resolveCareerInterview(
+  career: CareerSaveState,
+  prompt: InterviewPrompt,
+  choice: InterviewChoice
+): CareerSaveState {
+  const nextReputation = Math.max(0, career.reputation + choice.reputationDelta);
+  const prevAffinity = career.sponsorAffinity ?? 55;
+  const nextAffinity = Math.max(
+    0,
+    Math.min(100, prevAffinity + choice.sponsorAffinityDelta)
+  );
+  const updatedSponsors = evaluateSponsorInvitations(
+    career.tier,
+    nextReputation,
+    career.sponsors
+  );
+
+  let updatedRivalries = career.rivalries ? [...career.rivalries] : [];
+  if (choice.rivalryIntensityDelta && updatedRivalries.length > 0) {
+    // Slightly intensifies existing top/most recent rivalry when provoking on camera
+    const sorted = [...updatedRivalries].sort((a, b) => b.intensity - a.intensity);
+    const targetId = sorted[0]?.rivalId;
+    if (targetId) {
+      updatedRivalries = updatedRivalries.map((r) => {
+        if (r.rivalId !== targetId) return r;
+        const bumped = Math.min(3, r.intensity + 1) as 1 | 2 | 3;
+        return {
+          ...r,
+          intensity: bumped,
+        };
+      });
+    }
+  }
+
+  const record: CareerInterviewRecord = {
+    id: `${prompt.id}-${Date.now()}`,
+    season: prompt.season,
+    eventName: prompt.eventName,
+    beachName: prompt.beachName,
+    roundLabel: prompt.roundLabel,
+    trigger: prompt.trigger,
+    triggerBadge: prompt.triggerBadge,
+    journalistName: prompt.journalistName,
+    question: prompt.question,
+    answerText: choice.reactionQuote,
+    tone: choice.tone,
+    reputationDelta: choice.reputationDelta,
+    sponsorAffinityDelta: choice.sponsorAffinityDelta,
+    consequenceSummary: choice.consequenceLabel,
+    timestamp: new Date().toISOString(),
+  };
+
+  const nextHistory = [record, ...(career.interviewHistory ?? [])].slice(0, 20);
+  const nextRecentIds = [
+    prompt.questionId,
+    ...(career.recentInterviewQuestionIds ?? []).filter((id) => id !== prompt.questionId),
+  ].slice(0, 8);
+
+  const nextState: CareerSaveState = {
+    ...career,
+    reputation: nextReputation,
+    sponsorAffinity: nextAffinity,
+    sponsors: updatedSponsors,
+    rivalries: updatedRivalries,
+    interviewHistory: nextHistory,
+    recentInterviewQuestionIds: nextRecentIds,
+  };
+
+  saveCareerState(nextState);
+  return nextState;
+}
+
+
 
 

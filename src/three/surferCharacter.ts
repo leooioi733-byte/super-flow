@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { InterviewTone, VictoryCutsceneKind } from '../types/career';
 import { SurfboardSpec, SurferProfile } from '../types/game';
 import { createSurfboardGroup } from './coastalEnvironment';
 import { SurferPhysicsState } from './wavePhysics';
@@ -29,6 +30,26 @@ export interface SurferRig {
     outQuat: THREE.Quaternion
   ) => void;
   animate: (state: SurferPhysicsState, time: number, dt: number) => void;
+  animateVictory: (
+    kind: VictoryCutsceneKind,
+    stage: number,
+    stageProgress: number,
+    time: number,
+    dt: number,
+    worldPos: THREE.Vector3,
+    waveNormal: THREE.Vector3,
+    heading: number,
+    boardAnchorWorld?: THREE.Vector3
+  ) => void;
+  animateInterview: (
+    phase: 'question' | 'reaction',
+    tone: InterviewTone | undefined,
+    time: number,
+    dt: number,
+    worldPos: THREE.Vector3,
+    heading: number,
+    boardAnchorWorld?: THREE.Vector3
+  ) => void;
   dispose: () => void;
 }
 
@@ -971,6 +992,399 @@ export function createSurferRig(
     rightElbow.rotation.x = damp(rightElbow.rotation.x, rElbX, armLambda, dt);
   };
 
+  const animateVictory = (
+    kind: VictoryCutsceneKind,
+    stage: number,
+    stageProgress: number,
+    time: number,
+    dt: number,
+    worldPos: THREE.Vector3,
+    waveNormal: THREE.Vector3,
+    heading: number,
+    boardAnchorWorld?: THREE.Vector3
+  ) => {
+    setFirstPersonMode(false);
+    root.position.copy(worldPos);
+    const damp = THREE.MathUtils.damp;
+    const stanceSign = isGoofy ? -1 : 1;
+
+    let hipsY = 0.86;
+    let hipsZ = -0.04;
+    let hipsRotX = 0.02;
+    let hipsRotY = stanceSign * 0.85;
+    let hipsRotZ = 0;
+    let torsoRotX = 0.06;
+    let torsoRotY = -stanceSign * 0.45;
+    let torsoRotZ = 0;
+    let headRotY = 0;
+    let headRotX = -0.06;
+
+    let lHipX = -0.22;
+    let lKneeX = 0.42;
+    let rHipX = -0.26;
+    let rKneeX = 0.46;
+
+    let lShX = -0.45;
+    let lShZ = -0.58;
+    let lElbX = -0.45;
+    let rShX = -2.2;
+    let rShZ = 0.48;
+    let rElbX = -0.65;
+
+    let boardOffsetX = 0;
+    let boardOffsetY = 0;
+    let boardOffsetZ = 0;
+    let boardRotX = 0;
+    let boardRotY = 0;
+    let boardRotZ = 0;
+
+    if (kind === 'championship_ceremony') {
+      // Champion standing upright on the coastal podium stage beside trophy & board
+      characterGroup.position.set(0, 0, 0);
+      characterGroup.quaternion.setFromAxisAngle(_yAxis, heading);
+
+      if (boardAnchorWorld) {
+        boardContainer.position.set(
+          boardAnchorWorld.x - worldPos.x,
+          boardAnchorWorld.y - worldPos.y + 1.0,
+          boardAnchorWorld.z - worldPos.z
+        );
+      } else {
+        boardContainer.position.set(-0.62, 1.0, -0.06);
+      }
+      _yawQuat.setFromAxisAngle(_yAxis, heading + 0.14);
+      _pitchQuat.setFromAxisAngle(_xAxis, -Math.PI * 0.46);
+      _rollQuat.setFromAxisAngle(_zAxis, 0.06);
+      boardContainer.quaternion.copy(_yawQuat).multiply(_pitchQuat).multiply(_rollQuat);
+
+      const breathe = Math.sin(time * 2.2) * 0.014;
+      hipsY = 0.89 + breathe;
+      hipsZ = 0;
+      hipsRotX = 0;
+      hipsRotY = 0;
+      hipsRotZ = 0;
+      torsoRotX = -0.03;
+      torsoRotY = Math.sin(time * 0.85) * 0.12;
+      torsoRotZ = 0;
+      headRotY = Math.sin(time * 1.15) * 0.16;
+      headRotX = -0.05;
+
+      lHipX = -0.04;
+      lKneeX = 0.08;
+      rHipX = -0.04;
+      rKneeX = 0.08;
+
+      if (stage === 1) {
+        // Proud champion presentation stance gesturing toward the 3D Trophy
+        rShX = -1.18 + Math.sin(time * 2.6) * 0.06;
+        rShZ = 0.62;
+        rElbX = -0.52;
+        lShX = -0.18;
+        lShZ = -0.32;
+        lElbX = -0.35;
+      } else {
+        // Raised champion salute + crowd wave
+        const pump = Math.sin(time * 3.8) * 0.1;
+        rShX = -2.42 + pump;
+        rShZ = 0.45;
+        rElbX = -0.45 - Math.max(0, pump) * 0.5;
+        lShX = stage >= 3 ? -2.05 + Math.sin(time * 5.0) * 0.18 : -0.32;
+        lShZ = stage >= 3 ? -0.68 : -0.38;
+        lElbX = stage >= 3 ? -0.52 : -0.42;
+      }
+    } else {
+      // Water-based celebrations standing on surfboard riding ocean swell
+      characterGroup.position.set(0, 0, 0);
+      boardContainer.position.set(0, 0, 0);
+      _alignQuat.setFromUnitVectors(_up, waveNormal);
+      _yawQuat.setFromAxisAngle(_yAxis, heading);
+      const boardRock = Math.sin(time * 2.4) * 0.045;
+      _rollQuat.setFromAxisAngle(_zAxis, boardRock);
+      const noseFloat = kind === 'final_win' && stage === 1 ? -0.08 : -0.04;
+      _pitchQuat.setFromAxisAngle(_xAxis, noseFloat);
+      boardContainer.quaternion
+        .copy(_alignQuat)
+        .multiply(_yawQuat)
+        .multiply(_rollQuat)
+        .multiply(_pitchQuat);
+      characterGroup.quaternion.copy(boardContainer.quaternion);
+
+      const bob = Math.sin(time * 3.2) * 0.018;
+
+      if (kind === 'heat_win') {
+        // Channel close-up fist pump celebration
+        const pump = Math.sin(time * 6.2);
+        hipsY = 0.85 + bob;
+        hipsRotY = stanceSign * 0.72;
+        torsoRotX = 0.04;
+        torsoRotY = -stanceSign * 0.42;
+        headRotY = Math.sin(time * 1.4) * 0.12;
+        lShX = -0.42;
+        lShZ = -0.78;
+        lElbX = -0.58;
+        rShX = -2.28 + pump * 0.24;
+        rShZ = 0.44;
+        rElbX = -0.78 + pump * 0.35;
+      } else if (kind === 'quarterfinal_win') {
+        // Confident fist-pump & proud shaka salute to camera
+        const wave = Math.sin(time * 5.2);
+        hipsY = 0.84 + bob;
+        hipsRotY = stanceSign * 0.65;
+        torsoRotX = 0.05;
+        torsoRotY = -stanceSign * 0.35 + wave * 0.08;
+        headRotY = Math.sin(time * 1.3) * 0.14;
+        if (stage === 1) {
+          rShX = -2.35 + wave * 0.22;
+          rShZ = 0.52;
+          rElbX = -0.72;
+          lShX = -0.55;
+          lShZ = -0.82;
+          lElbX = -0.48;
+        } else {
+          // Wide arms celebratory glide
+          rShX = -1.95 + wave * 0.15;
+          rShZ = 0.88;
+          rElbX = -0.35;
+          lShX = -1.85 - wave * 0.12;
+          lShZ = -0.85;
+          lElbX = -0.38;
+        }
+      } else if (kind === 'semifinal_win') {
+        // Intense celebratory V-pose & double-fist victory bounce
+        const bounce = Math.abs(Math.sin(time * 5.0));
+        hipsY = 0.86 + bounce * 0.045;
+        hipsRotY = stanceSign * 0.42;
+        torsoRotX = -0.04;
+        torsoRotY = Math.sin(time * 2.2) * 0.22;
+        torsoRotZ = Math.sin(time * 5.0) * 0.06;
+        lHipX = -0.18 - bounce * 0.08;
+        lKneeX = 0.34 + bounce * 0.14;
+        rHipX = -0.22 - bounce * 0.08;
+        rKneeX = 0.38 + bounce * 0.14;
+
+        const armPump = Math.sin(time * 7.2) * 0.2;
+        lShX = -2.52 + armPump;
+        lShZ = -0.76;
+        lElbX = -0.42 + armPump * 0.35;
+        rShX = -2.52 - armPump * 0.8;
+        rShZ = 0.76;
+        rElbX = -0.42 - armPump * 0.35;
+      } else {
+        // 'final_win': Stage 1 post-wave victorious ride-out -> Stage 2 & 3 ecstatic Champion celebration
+        if (stage === 1) {
+          const tuck = 1 - stageProgress * 0.5;
+          hipsY = 0.76 + (1 - tuck) * 0.1;
+          hipsRotY = stanceSign * 1.05;
+          torsoRotX = 0.24 * tuck;
+          torsoRotY = -stanceSign * 0.25;
+          lHipX = -0.45 * tuck - 0.18 * (1 - tuck);
+          lKneeX = 0.85 * tuck + 0.34 * (1 - tuck);
+          rHipX = -0.52 * tuck - 0.22 * (1 - tuck);
+          rKneeX = 0.92 * tuck + 0.38 * (1 - tuck);
+          lShX = -0.65;
+          lShZ = -0.95;
+          lElbX = -0.35;
+          rShX = THREE.MathUtils.lerp(-0.55, -2.35, stageProgress);
+          rShZ = 0.85;
+          rElbX = -0.42;
+        } else {
+          const euphoria = Math.sin(time * 6.0);
+          hipsY = 0.88 + Math.abs(euphoria) * 0.035;
+          hipsRotY = stanceSign * 0.3;
+          torsoRotX = -0.05;
+          torsoRotY = Math.sin(time * 1.8) * 0.24;
+          lHipX = -0.16;
+          lKneeX = 0.3;
+          rHipX = -0.2;
+          rKneeX = 0.34;
+          lShX = -2.58 + euphoria * 0.16;
+          lShZ = -0.84;
+          lElbX = -0.35;
+          rShX = -2.58 - euphoria * 0.16;
+          rShZ = 0.84;
+          rElbX = -0.35;
+        }
+      }
+    }
+
+    const bodyLambda = 10.5;
+    const armLambda = 13.0;
+
+    boardMesh.position.x = damp(boardMesh.position.x, boardOffsetX, 14, dt);
+    boardMesh.position.y = damp(boardMesh.position.y, boardOffsetY, 14, dt);
+    boardMesh.position.z = damp(boardMesh.position.z, boardOffsetZ, 14, dt);
+    boardMesh.rotation.x = damp(boardMesh.rotation.x, boardRotX, 14, dt);
+    boardMesh.rotation.y = damp(boardMesh.rotation.y, boardRotY, 14, dt);
+    boardMesh.rotation.z = damp(boardMesh.rotation.z, boardRotZ, 14, dt);
+
+    hips.position.y = damp(hips.position.y, hipsY, bodyLambda, dt);
+    hips.position.z = damp(hips.position.z, hipsZ, bodyLambda, dt);
+    hips.rotation.x = damp(hips.rotation.x, hipsRotX, bodyLambda, dt);
+    hips.rotation.y = damp(hips.rotation.y, hipsRotY, bodyLambda, dt);
+    hips.rotation.z = damp(hips.rotation.z, hipsRotZ, bodyLambda, dt);
+
+    torso.rotation.x = damp(torso.rotation.x, torsoRotX, bodyLambda, dt);
+    torso.rotation.y = damp(torso.rotation.y, torsoRotY, bodyLambda, dt);
+    torso.rotation.z = damp(torso.rotation.z, torsoRotZ, bodyLambda, dt);
+
+    head.rotation.x = damp(head.rotation.x, headRotX, bodyLambda, dt);
+    head.rotation.y = damp(head.rotation.y, headRotY, bodyLambda, dt);
+
+    leftHip.rotation.x = damp(leftHip.rotation.x, lHipX, bodyLambda, dt);
+    leftKnee.rotation.x = damp(leftKnee.rotation.x, lKneeX, bodyLambda, dt);
+    rightHip.rotation.x = damp(rightHip.rotation.x, rHipX, bodyLambda, dt);
+    rightKnee.rotation.x = damp(rightKnee.rotation.x, rKneeX, bodyLambda, dt);
+
+    leftShoulder.rotation.x = damp(leftShoulder.rotation.x, lShX, armLambda, dt);
+    leftShoulder.rotation.z = damp(leftShoulder.rotation.z, lShZ, armLambda, dt);
+    leftElbow.rotation.x = damp(leftElbow.rotation.x, lElbX, armLambda, dt);
+
+    rightShoulder.rotation.x = damp(rightShoulder.rotation.x, rShX, armLambda, dt);
+    rightShoulder.rotation.z = damp(rightShoulder.rotation.z, rShZ, armLambda, dt);
+    rightElbow.rotation.x = damp(rightElbow.rotation.x, rElbX, armLambda, dt);
+  };
+
+  const animateInterview = (
+    phase: 'question' | 'reaction',
+    tone: InterviewTone | undefined,
+    time: number,
+    dt: number,
+    worldPos: THREE.Vector3,
+    heading: number,
+    boardAnchorWorld?: THREE.Vector3
+  ) => {
+    root.position.copy(worldPos);
+    _yawQuat.setFromAxisAngle(_yAxis, heading);
+    root.quaternion.copy(_yawQuat);
+
+    characterGroup.position.set(0, 0, 0);
+    characterGroup.rotation.set(0, 0, 0);
+
+    boardContainer.position.set(0, 0, 0);
+    boardContainer.rotation.set(0, 0, 0);
+
+    let boardOffsetX = 0.65;
+    let boardOffsetY = 0.04;
+    let boardOffsetZ = 0;
+    if (boardAnchorWorld) {
+      const localX = boardAnchorWorld.x - worldPos.x;
+      const localZ = boardAnchorWorld.z - worldPos.z;
+      const cosH = Math.cos(-heading);
+      const sinH = Math.sin(-heading);
+      boardOffsetX = localX * cosH - localZ * sinH;
+      boardOffsetZ = localX * sinH + localZ * cosH;
+      boardOffsetY = 1.05 + (boardAnchorWorld.y - worldPos.y);
+    }
+
+    const breath = Math.sin(time * 2.3);
+    let hipsY = 0.90 + breath * 0.008;
+    const hipsRotY = Math.sin(time * 0.6) * 0.04;
+    let torsoRotX = 0.03;
+    let torsoRotY = 0.06;
+    let torsoRotZ = 0;
+    let headRotX = -0.02 + Math.sin(time * 1.9) * 0.03;
+    let headRotY = 0.1 + Math.sin(time * 0.9) * 0.05;
+    const lHipX = -0.04;
+    const lKneeX = 0.08;
+    const rHipX = -0.04;
+    const rKneeX = 0.08;
+
+    let lShX = -0.22;
+    let lShZ = -0.14;
+    let lElbX = -0.45;
+    let rShX = -0.24;
+    let rShZ = 0.14;
+    let rElbX = -0.48;
+
+    if (phase === 'question') {
+      // Attentive listening athlete stance with relaxed hands & subtle listening nods
+      headRotX = 0.02 + Math.sin(time * 3.1) * 0.045;
+      headRotY = 0.14;
+      lShX = -0.26;
+      lShZ = -0.12;
+      lElbX = -0.62;
+      rShX = -0.3;
+      rShZ = 0.12;
+      rElbX = -0.68;
+    } else if (tone === 'humildade') {
+      // Respectful chest-tap gesture & warm appreciative nod
+      const nod = Math.sin(time * 3.8) * 0.08;
+      torsoRotX = 0.08;
+      headRotX = 0.07 + nod;
+      headRotY = 0.06;
+      lShX = -0.22;
+      lShZ = -0.16;
+      lElbX = -0.45;
+      rShX = -0.82 + Math.sin(time * 3.0) * 0.08;
+      rShZ = 0.34;
+      rElbX = -1.42;
+    } else if (tone === 'provocacao') {
+      // Bold, expressive swagger lean with assertive speaking gesture
+      const pulse = Math.sin(time * 5.2);
+      hipsY = 0.91 + Math.abs(pulse) * 0.015;
+      torsoRotX = -0.06;
+      torsoRotY = 0.12 + pulse * 0.07;
+      torsoRotZ = -0.05;
+      headRotX = -0.09;
+      headRotY = 0.04 + pulse * 0.06;
+      lShX = -0.78 + pulse * 0.22;
+      lShZ = -0.42;
+      lElbX = -0.58 + pulse * 0.18;
+      rShX = -1.25 - pulse * 0.16;
+      rShZ = 0.38;
+      rElbX = -0.62;
+    } else {
+      // 'confianca': Composed champion stance with assured open hand gesture
+      const speak = Math.sin(time * 4.2);
+      torsoRotX = -0.02;
+      torsoRotY = 0.05 + speak * 0.04;
+      headRotX = -0.04 + speak * 0.04;
+      headRotY = 0.05;
+      lShX = -0.68 + speak * 0.15;
+      lShZ = -0.28;
+      lElbX = -0.85 + speak * 0.12;
+      rShX = -0.52 - speak * 0.1;
+      rShZ = 0.24;
+      rElbX = -0.78;
+    }
+
+    const bodyLambda = 7.5;
+    const armLambda = 9.0;
+
+    boardMesh.position.x = damp(boardMesh.position.x, boardOffsetX, 14, dt);
+    boardMesh.position.y = damp(boardMesh.position.y, boardOffsetY, 14, dt);
+    boardMesh.position.z = damp(boardMesh.position.z, boardOffsetZ, 14, dt);
+    boardMesh.rotation.x = damp(boardMesh.rotation.x, -Math.PI * 0.44, 14, dt);
+    boardMesh.rotation.y = damp(boardMesh.rotation.y, 0.06, 14, dt);
+    boardMesh.rotation.z = damp(boardMesh.rotation.z, 0.22, 14, dt);
+
+    hips.position.y = damp(hips.position.y, hipsY, bodyLambda, dt);
+    hips.position.z = damp(hips.position.z, 0, bodyLambda, dt);
+    hips.rotation.x = damp(hips.rotation.x, 0, bodyLambda, dt);
+    hips.rotation.y = damp(hips.rotation.y, hipsRotY, bodyLambda, dt);
+    hips.rotation.z = damp(hips.rotation.z, 0, bodyLambda, dt);
+
+    torso.rotation.x = damp(torso.rotation.x, torsoRotX, bodyLambda, dt);
+    torso.rotation.y = damp(torso.rotation.y, torsoRotY, bodyLambda, dt);
+    torso.rotation.z = damp(torso.rotation.z, torsoRotZ, bodyLambda, dt);
+
+    head.rotation.x = damp(head.rotation.x, headRotX, bodyLambda, dt);
+    head.rotation.y = damp(head.rotation.y, headRotY, bodyLambda, dt);
+
+    leftHip.rotation.x = damp(leftHip.rotation.x, lHipX, bodyLambda, dt);
+    leftKnee.rotation.x = damp(leftKnee.rotation.x, lKneeX, bodyLambda, dt);
+    rightHip.rotation.x = damp(rightHip.rotation.x, rHipX, bodyLambda, dt);
+    rightKnee.rotation.x = damp(rightKnee.rotation.x, rKneeX, bodyLambda, dt);
+
+    leftShoulder.rotation.x = damp(leftShoulder.rotation.x, lShX, armLambda, dt);
+    leftShoulder.rotation.z = damp(leftShoulder.rotation.z, lShZ, armLambda, dt);
+    leftElbow.rotation.x = damp(leftElbow.rotation.x, lElbX, armLambda, dt);
+
+    rightShoulder.rotation.x = damp(rightShoulder.rotation.x, rShX, armLambda, dt);
+    rightShoulder.rotation.z = damp(rightShoulder.rotation.z, rShZ, armLambda, dt);
+    rightElbow.rotation.x = damp(rightElbow.rotation.x, rElbX, armLambda, dt);
+  };
+
   return {
     root,
     characterGroup,
@@ -991,6 +1405,8 @@ export function createSurferRig(
     setFirstPersonMode,
     getFirstPersonPose,
     animate,
+    animateVictory,
+    animateInterview,
     dispose: () => {
       root.traverse((child) => {
         if (child instanceof THREE.Mesh) {

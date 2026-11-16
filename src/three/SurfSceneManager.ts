@@ -4,6 +4,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { oceanAudio } from '../audio/oceanAudio';
+import { InterviewTone, VictoryCutsceneKind } from '../types/career';
 import {
   BeachAtmosphere,
   BeachEnvironmentConfig,
@@ -26,6 +27,11 @@ import {
   createCoastalEnvironment,
   createSurfboardGroup,
 } from './coastalEnvironment';
+import {
+  createInterviewStageSystem,
+  InterviewCameraPhase,
+  InterviewStageSystem,
+} from './interviewStageSystem';
 import { createMarineLifeSystem, MarineLifeSystem } from './marineLifeSystem';
 import {
   CareerHeatNpcSpec,
@@ -38,6 +44,10 @@ import { createRainSystem, RainSystem } from './rainSystem';
 import { ReplayBuffer } from './replayBuffer';
 import { createSkySystem, SkySystem } from './skyShader';
 import { createSurferRig, SurferRig } from './surferCharacter';
+import {
+  createVictoryCeremonyProps,
+  VictoryCeremonyProps,
+} from './victoryCeremonyProps';
 import { createWaterParticleSystem, WaterParticleSystem } from './waterParticles';
 import {
   sampleSurfWave,
@@ -58,6 +68,13 @@ const _fpPos = new THREE.Vector3();
 const _fpQuat = new THREE.Quaternion();
 const _cutCamPos = new THREE.Vector3();
 const _cutLookTarget = new THREE.Vector3();
+const _vicPos = new THREE.Vector3();
+const _vicBoardPos = new THREE.Vector3();
+const _vicTrophyPos = new THREE.Vector3();
+const _vicNormal = new THREE.Vector3(0, 1, 0);
+const _intvSurferPos = new THREE.Vector3();
+const _intvBoardPos = new THREE.Vector3();
+const _intvShadowFocus = new THREE.Vector3();
 const _prevCamPos = new THREE.Vector3(-4, 4.4, 24);
 const _camDelta = new THREE.Vector3();
 const _camFwd = new THREE.Vector3();
@@ -269,6 +286,17 @@ export interface SceneUpdatePayload {
   startInWater?: boolean;
   careerOpponents?: CareerHeatNpcSpec[] | null;
   cutsceneRequest?: { key: string; seed: number } | null;
+  victoryCutsceneRequest?: {
+    key: string;
+    kind: VictoryCutsceneKind;
+    seed: number;
+    accentColor?: string;
+  } | null;
+  interviewState?: {
+    phase: InterviewCameraPhase;
+    tone?: InterviewTone;
+    accentColor?: string;
+  } | null;
 }
 
 export class SurfSceneManager {
@@ -291,6 +319,8 @@ export class SurfSceneManager {
   private npcSurfers: NpcSurferSystem;
   private waterParticles: WaterParticleSystem;
   private rainSystem: RainSystem;
+  private victoryCeremony: VictoryCeremonyProps;
+  private interviewStage: InterviewStageSystem;
   private physics: SurfPhysicsEngine;
 
   private sunLight: THREE.DirectionalLight;
@@ -421,6 +451,24 @@ export class SurfSceneManager {
   private lastLaunchedCutsceneKey = '';
   private onCutsceneComplete?: (key: string) => void;
 
+  // Cinematic Victory Cutscenes (5 scenes: Heat Win, Quartas, Semifinal, Final, Award Ceremony)
+  private victoryCutsceneActive = false;
+  private victoryCutsceneKey = '';
+  private victoryCutsceneKind: VictoryCutsceneKind = 'heat_win';
+  private victoryCutsceneTime = 0;
+  private victoryCutsceneDuration = 5.2;
+  private victoryCutsceneSeed = 0;
+  private victoryCutsceneStage = 1;
+  private victoryCutsceneStageProgress = 0;
+  private victoryCutscenePrevStage = 0;
+  private lastLaunchedVictoryKey = '';
+  private victorySprayState!: SurferPhysicsState;
+  private onVictoryCutsceneComplete?: (key: string) => void;
+
+  // Post-Competition Interactive Press Interview Stage
+  private interviewPhase: InterviewCameraPhase = 'question';
+  private interviewTone: InterviewTone | undefined;
+
   private onContextLostCallback?: (lost: boolean) => void;
 
   constructor(
@@ -431,12 +479,14 @@ export class SurfSceneManager {
     initialGraphics: GraphicsSettings,
     onHudUpdate?: (hud: SurfHUDState) => void,
     onContextLost?: (lost: boolean) => void,
-    onCutsceneComplete?: (key: string) => void
+    onCutsceneComplete?: (key: string) => void,
+    onVictoryCutsceneComplete?: (key: string) => void
   ) {
     this.container = container;
     this.onHudUpdate = onHudUpdate;
     this.onContextLostCallback = onContextLost;
     this.onCutsceneComplete = onCutsceneComplete;
+    this.onVictoryCutsceneComplete = onVictoryCutsceneComplete;
     this.isSoftwareGl = detectSoftwareWebGL();
     this.targetEnv = { ...initialEnv };
     this.graphics = { ...initialGraphics };
@@ -572,7 +622,14 @@ export class SurfSceneManager {
     this.rainSystem = createRainSystem();
     this.scene.add(this.rainSystem.mesh);
 
+    this.victoryCeremony = createVictoryCeremonyProps();
+    this.scene.add(this.victoryCeremony.group);
+
+    this.interviewStage = createInterviewStageSystem();
+    this.scene.add(this.interviewStage.group);
+
     this.physics = new SurfPhysicsEngine(initialEnv);
+    this.victorySprayState = this.clonePhysicsState(this.physics.state);
 
     // Shoreline Surfboard Anchor (for menu 'boards' showcase)
     this.boardAnchor = new THREE.Group();
@@ -596,17 +653,23 @@ export class SurfSceneManager {
       const prevSurfer = this.surferRig.root.visible;
       const prevParticles = this.waterParticles.mesh.visible;
       const prevRain = this.rainSystem.mesh.visible;
+      const prevCeremony = this.victoryCeremony.group.visible;
+      const prevInterview = this.interviewStage.group.visible;
       this.barrelCurl.mesh.visible = true;
       this.surferRig.root.visible = true;
       this.npcSurfers.setEnabled(true);
       this.waterParticles.mesh.visible = true;
       this.rainSystem.mesh.visible = true;
+      this.victoryCeremony.setVisible(true);
+      this.interviewStage.setVisible(true);
       this.renderer.compile(this.scene, this.camera);
       this.barrelCurl.mesh.visible = prevCurl;
       this.surferRig.root.visible = prevSurfer;
       this.npcSurfers.setEnabled(false);
       this.waterParticles.mesh.visible = prevParticles;
       this.rainSystem.mesh.visible = prevRain;
+      this.victoryCeremony.setVisible(prevCeremony);
+      this.interviewStage.setVisible(prevInterview);
     }
 
     window.addEventListener('resize', this.handleResize);
@@ -1191,9 +1254,47 @@ export class SurfSceneManager {
     }
   }
 
+  public setVictoryCutsceneCompleteHandler(handler?: (key: string) => void) {
+    this.onVictoryCutsceneComplete = handler;
+  }
+
+  public skipVictoryCutscene() {
+    if (!this.victoryCutsceneActive) return;
+    this.completeVictoryCutscene();
+  }
+
+  private getVictoryDuration(kind: VictoryCutsceneKind): number {
+    switch (kind) {
+      case 'heat_win':
+        return 5.0;
+      case 'quarterfinal_win':
+        return 5.6;
+      case 'semifinal_win':
+        return 6.4;
+      case 'final_win':
+        return 7.0;
+      case 'championship_ceremony':
+        return 7.5;
+    }
+  }
+
+  private completeVictoryCutscene() {
+    const finishedKey = this.victoryCutsceneKey;
+    this.victoryCutsceneActive = false;
+    this.victoryCutsceneStage = 3;
+    this.victoryCutsceneStageProgress = 1;
+    this.victoryCeremony.setVisible(false);
+    this.emitHudState(true);
+    if (finishedKey) {
+      this.onVictoryCutsceneComplete?.(finishedKey);
+    }
+  }
+
   public updateState(payload: SceneUpdatePayload) {
     const wasSurfing = this.screen === 'surfing';
     const isNowSurfing = payload.screen === 'surfing';
+    const wasInterview = this.screen === 'interview';
+    const isNowInterview = payload.screen === 'interview';
     const cameraModeChanged = payload.cameraMode !== this.cameraMode;
 
     if (wasSurfing && !isNowSurfing && this.replayActive) {
@@ -1324,6 +1425,9 @@ export class SurfSceneManager {
     } else if (wasSurfing && !isNowSurfing) {
       this.cutsceneActive = false;
       this.lastLaunchedCutsceneKey = '';
+      this.victoryCutsceneActive = false;
+      this.lastLaunchedVictoryKey = '';
+      this.victoryCeremony.setVisible(false);
       this.replayActive = false;
       this.replayBuffer.clear();
       this.npcSurfers.setEnabled(false);
@@ -1346,6 +1450,88 @@ export class SurfSceneManager {
       this.activePointers.clear();
       this.camera.rotation.z = 0;
       oceanAudio.updateSurfTelemetry(0, 0, false, 0, false, this.weatherRain, 0);
+    }
+
+    const reqVictory = isNowSurfing ? payload.victoryCutsceneRequest : null;
+    if (reqVictory && reqVictory.key !== this.lastLaunchedVictoryKey) {
+      this.lastLaunchedVictoryKey = reqVictory.key;
+      this.cutsceneActive = false;
+      this.replayActive = false;
+      this.paused = false;
+      this.victoryCutsceneActive = true;
+      this.victoryCutsceneKey = reqVictory.key;
+      this.victoryCutsceneKind = reqVictory.kind;
+      this.victoryCutsceneSeed = reqVictory.seed;
+      this.victoryCutsceneTime = 0;
+      this.victoryCutsceneDuration = this.getVictoryDuration(reqVictory.kind);
+      this.victoryCutsceneStage = 1;
+      this.victoryCutsceneStageProgress = 0;
+      this.victoryCutscenePrevStage = 0;
+      this.surferRig.root.visible = true;
+      this.surferRig.setFirstPersonMode(false);
+      this.fpBlend = 0;
+      this.boardAnchor.visible = false;
+      this.waterParticles.mesh.visible = reqVictory.kind !== 'championship_ceremony';
+      this.waterParticles.reset();
+      this.victoryCeremony.setVisible(
+        reqVictory.kind === 'championship_ceremony',
+        reqVictory.accentColor
+      );
+      this.impactBlur = 0;
+      this.lensDroplets = 0;
+      this.whitewaterWash = 0;
+      this.underwaterBlend = 0;
+      this.slowMoGray = 0;
+      this.shakeTrauma = 0;
+      if (reqVictory.kind === 'championship_ceremony') {
+        this.npcSurfers.setEnabled(false);
+        this.victoryCeremony.getSurferAnchor(_vicPos);
+        this.camera.position.set(_vicPos.x + 2.4, _vicPos.y + 1.85, _vicPos.z - 5.2);
+        _currentLook.set(_vicPos.x + 0.15, _vicPos.y + 1.05, _vicPos.z);
+        this.camera.lookAt(_currentLook);
+      } else {
+        this.npcSurfers.setEnabled(true);
+      }
+      this.emitHudState(true);
+    } else if (!reqVictory && this.victoryCutsceneActive) {
+      this.victoryCutsceneActive = false;
+      this.victoryCeremony.setVisible(false);
+      this.emitHudState(true);
+    }
+
+    this.interviewPhase = payload.interviewState?.phase ?? 'question';
+    this.interviewTone = payload.interviewState?.tone;
+
+    if (isNowInterview) {
+      this.interviewStage.setVisible(true, payload.interviewState?.accentColor);
+      this.victoryCeremony.setVisible(false);
+      this.cutsceneActive = false;
+      this.victoryCutsceneActive = false;
+      this.surferRig.root.visible = true;
+      this.surferRig.setFirstPersonMode(false);
+      this.fpBlend = 0;
+      this.boardAnchor.visible = false;
+      this.waterParticles.mesh.visible = false;
+      this.barrelCurl.mesh.visible = false;
+      this.npcSurfers.setEnabled(false);
+      this.ocean.material.uniforms.uSurfMode.value = 0.0;
+      if (!wasInterview) {
+        this.interviewStage.getCameraTargets(
+          this.interviewPhase,
+          this.elapsedTime,
+          this.camera.position,
+          _currentLook
+        );
+        this.camera.lookAt(_currentLook);
+        _tpCurPos.copy(this.camera.position);
+        _prevCamPos.copy(this.camera.position);
+      }
+    } else if (wasInterview) {
+      this.interviewStage.setVisible(false);
+      if (!isNowSurfing) {
+        this.surferRig.root.visible = false;
+        this.boardAnchor.visible = true;
+      }
     }
   }
 
@@ -1427,11 +1613,16 @@ export class SurfSceneManager {
     const theta = THREE.MathUtils.degToRad(env.sunAzimuth);
     _sunDir.setFromSphericalCoords(1, phi, theta).normalize();
 
-    if (this.screen === 'surfing') {
-      const sp = this.physics.state.position;
+    if (this.screen === 'surfing' || this.screen === 'interview') {
+      const focusPos =
+        this.screen === 'interview'
+          ? this.interviewStage.getShadowFocus(_intvShadowFocus)
+          : this.victoryCutsceneActive && this.victoryCutsceneKind === 'championship_ceremony'
+            ? this.victoryCeremony.getSurferAnchor(_vicPos)
+            : this.physics.state.position;
       // Snap shadow target to 0.5m texel grid to prevent shadow edge shimmering/stutter
-      const snapX = Math.round(sp.x * 2) * 0.5;
-      const snapZ = Math.round(sp.z * 2) * 0.5;
+      const snapX = Math.round(focusPos.x * 2) * 0.5;
+      const snapZ = Math.round(focusPos.z * 2) * 0.5;
       this.sunLight.position.set(
         snapX + _sunDir.x * 75,
         _sunDir.y * 75,
@@ -1527,6 +1718,11 @@ export class SurfSceneManager {
     if (this.lastPausedEmitted) {
       this.lastPausedEmitted = false;
       this.emitHudState(true);
+    }
+
+    if (this.victoryCutsceneActive) {
+      this.updateVictoryCutscene(rawDt);
+      return;
     }
 
     if (this.cutsceneActive) {
@@ -1780,6 +1976,174 @@ export class SurfSceneManager {
     }
   }
 
+  private updateVictoryCutscene(rawDt: number) {
+    this.victoryCutsceneTime += rawDt;
+    const totalDur = this.victoryCutsceneDuration;
+    if (this.victoryCutsceneTime >= totalDur) {
+      this.completeVictoryCutscene();
+      return;
+    }
+
+    const overallP = THREE.MathUtils.clamp(this.victoryCutsceneTime / totalDur, 0, 1);
+    const kind = this.victoryCutsceneKind;
+    let stage = 1;
+    let stageStart = 0;
+    let stageDur = totalDur;
+
+    if (kind === 'heat_win') {
+      if (overallP < 0.45) {
+        stage = 1;
+        stageStart = 0;
+        stageDur = totalDur * 0.45;
+      } else {
+        stage = 2;
+        stageStart = totalDur * 0.45;
+        stageDur = totalDur * 0.55;
+      }
+    } else if (kind === 'quarterfinal_win') {
+      if (overallP < 0.42) {
+        stage = 1;
+        stageStart = 0;
+        stageDur = totalDur * 0.42;
+      } else {
+        stage = 2;
+        stageStart = totalDur * 0.42;
+        stageDur = totalDur * 0.58;
+      }
+    } else {
+      if (overallP < 0.34) {
+        stage = 1;
+        stageStart = 0;
+        stageDur = totalDur * 0.34;
+      } else if (overallP < 0.68) {
+        stage = 2;
+        stageStart = totalDur * 0.34;
+        stageDur = totalDur * 0.34;
+      } else {
+        stage = 3;
+        stageStart = totalDur * 0.68;
+        stageDur = totalDur * 0.32;
+      }
+    }
+
+    this.victoryCutsceneStage = stage;
+    this.victoryCutsceneStageProgress = THREE.MathUtils.clamp(
+      (this.victoryCutsceneTime - stageStart) / Math.max(0.1, stageDur),
+      0,
+      1
+    );
+
+    if (stage !== this.victoryCutscenePrevStage) {
+      this.victoryCutscenePrevStage = stage;
+      oceanAudio.playVictoryCutsceneCue(kind, stage);
+    }
+
+    const wp = this.physics.waveParams;
+    const oceanU = this.ocean.material.uniforms;
+
+    if (kind === 'championship_ceremony') {
+      oceanAudio.updateSurfTelemetry(0, 0, false, 0, false, this.weatherRain, 0);
+      oceanU.uSurfMode.value = THREE.MathUtils.damp(oceanU.uSurfMode.value, 0.0, 5.0, rawDt);
+      this.barrelCurl.mesh.visible = false;
+      this.victoryCeremony.update(this.elapsedTime, overallP);
+      this.victoryCeremony.getSurferAnchor(_vicPos);
+      this.victoryCeremony.getBoardAnchor(_vicBoardPos);
+      _vicNormal.set(0, 1, 0);
+      this.surferRig.animateVictory(
+        kind,
+        stage,
+        this.victoryCutsceneStageProgress,
+        this.elapsedTime,
+        Math.max(0.001, rawDt),
+        _vicPos,
+        _vicNormal,
+        Math.PI + 0.18,
+        _vicBoardPos
+      );
+    } else {
+      wp.simTime += rawDt * 0.9;
+      wp.waveCenterZ += wp.waveSpeed * rawDt * 0.45;
+      if (wp.waveCenterZ > 8) {
+        wp.waveCenterZ = -125;
+      }
+      wp.breakX += wp.breakDir * wp.waveSpeed * 0.22 * rawDt;
+
+      oceanU.uSurfMode.value = THREE.MathUtils.damp(oceanU.uSurfMode.value, 1.0, 6.0, rawDt);
+      oceanU.uSurfSimTime.value = wp.simTime;
+      oceanU.uWaveCenterZ.value = wp.waveCenterZ;
+      oceanU.uSurfWaveHeight.value = wp.waveHeight;
+      oceanU.uSurfWaveSpeed.value = wp.waveSpeed;
+      oceanU.uSurfSteepness.value = wp.steepness;
+      oceanU.uBreakX.value = wp.breakX;
+      oceanU.uBreakDir.value = wp.breakDir;
+      oceanU.uWaveLengthZ.value = wp.waveLengthZ;
+
+      this.barrelCurl.update(
+        wp,
+        oceanU.uShallowColor.value,
+        oceanU.uDeepColor.value,
+        _sunDir,
+        this.weatherOvercast,
+        this.weatherRain
+      );
+
+      const dir = this.victoryCutsceneSeed % 2 === 0 ? 1 : -1;
+      const glideSpeed = kind === 'final_win' && stage === 1 ? 7.2 : 3.2;
+      const surferX = dir * (4.0 + this.victoryCutsceneTime * glideSpeed * 0.35);
+      const surferZ = -18.0 + this.victoryCutsceneTime * 1.1;
+      const sample = sampleSurfWave(surferX, surferZ, wp, _vicNormal);
+      _vicPos.set(surferX, sample.height + 0.03, surferZ);
+      const heading = Math.PI + dir * (kind === 'final_win' && stage === 1 ? 0.55 : 0.25);
+
+      this.surferRig.animateVictory(
+        kind,
+        stage,
+        this.victoryCutsceneStageProgress,
+        this.elapsedTime,
+        Math.max(0.001, rawDt),
+        _vicPos,
+        _vicNormal,
+        heading
+      );
+
+      // Keep physics state position synced so water/camera collision stays accurate
+      this.physics.state.position.copy(_vicPos);
+
+      // Gentle celebratory spray wake behind board tail
+      this.victorySprayState.position.copy(_vicPos);
+      this.victorySprayState.heading = heading;
+      this.victorySprayState.phase = 'riding';
+      this.victorySprayState.speed = kind === 'final_win' && stage === 1 ? 10.5 : 5.5;
+      this.victorySprayState.carvingIntensity = kind === 'semifinal_win' || kind === 'final_win' ? 0.42 : 0.18;
+      this.victorySprayState.roll = dir * 0.25;
+      this.npcSurfers.update(
+        rawDt,
+        wp.simTime,
+        wp,
+        this.physics.state,
+        this.camera.position,
+        this.waterParticles
+      );
+      this.waterParticles.update(rawDt, this.victorySprayState);
+
+      oceanAudio.updateSurfTelemetry(
+        this.victorySprayState.speed,
+        0.15,
+        false,
+        0,
+        true,
+        this.weatherRain,
+        0
+      );
+    }
+
+    this.hudEmitAccum += rawDt;
+    if (this.hudEmitAccum >= 0.075) {
+      this.hudEmitAccum = 0;
+      this.emitHudState(false, 'shoulder');
+    }
+  }
+
   private emitHudState(force: boolean, sectionOverride?: SurfHUDState['waveSection']) {
     if (!this.onHudUpdate) return;
     const s = this.replayActive ? this.replayState : this.physics.state;
@@ -1817,10 +2181,11 @@ export class SurfSceneManager {
       currentWaveBarrelTime: s.currentWaveBarrelTime,
       completedWaves: this.cachedCompletedWavesRef,
       availability:
-        this.replayActive || this.cutsceneActive
+        this.replayActive || this.cutsceneActive || this.victoryCutsceneActive
           ? { bottomTurn: false, cutback: false, floater: false, air: false, duckDive: false }
           : this.physics.getManeuverAvailability(),
-      isPaused: this.paused && !this.replayActive && !this.cutsceneActive,
+      isPaused:
+        this.paused && !this.replayActive && !this.cutsceneActive && !this.victoryCutsceneActive,
       cameraMode: this.cameraMode,
       cameraModified:
         Math.abs(this.camLookYawTarget) > 0.04 ||
@@ -1836,6 +2201,16 @@ export class SurfSceneManager {
       cutsceneStage: this.cutsceneStage,
       cutsceneProgress: this.cutsceneActive
         ? THREE.MathUtils.clamp(this.cutsceneTime / 13.5, 0, 1)
+        : 0,
+      victoryCutsceneActive: this.victoryCutsceneActive,
+      victoryCutsceneKind: this.victoryCutsceneActive ? this.victoryCutsceneKind : null,
+      victoryCutsceneStage: this.victoryCutsceneActive ? this.victoryCutsceneStage : 0,
+      victoryCutsceneProgress: this.victoryCutsceneActive
+        ? THREE.MathUtils.clamp(
+            this.victoryCutsceneTime / Math.max(0.1, this.victoryCutsceneDuration),
+            0,
+            1
+          )
         : 0,
       replay: {
         active: this.replayActive,
@@ -1907,17 +2282,30 @@ export class SurfSceneManager {
         targetFov = 46;
         break;
       }
+      case 'interview': {
+        targetFov = this.interviewStage.getCameraTargets(
+          this.interviewPhase,
+          t,
+          _camPosTarget,
+          _camLookTarget
+        );
+        break;
+      }
     }
 
-    const posLambda = this.screen === 'lineup' ? 1.9 : 2.6;
+    const posLambda =
+      this.screen === 'interview' ? 4.4 : this.screen === 'lineup' ? 1.9 : 2.6;
     this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, _camPosTarget.x, posLambda, rawDt);
     this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, _camPosTarget.y, posLambda, rawDt);
     this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, _camPosTarget.z, posLambda, rawDt);
 
-    const menuFloorY = Math.max(
-      getBeachHeightAt(this.camera.position.x, this.camera.position.z) + 0.85,
-      1.35 + this.currentEnv.waveAmplitude * 0.55
-    );
+    const menuFloorY =
+      this.screen === 'interview'
+        ? getBeachHeightAt(this.camera.position.x, this.camera.position.z) + 0.45
+        : Math.max(
+            getBeachHeightAt(this.camera.position.x, this.camera.position.z) + 0.85,
+            1.35 + this.currentEnv.waveAmplitude * 0.55
+          );
     if (this.camera.position.y < menuFloorY) {
       this.camera.position.y = menuFloorY;
     }
@@ -2070,7 +2458,116 @@ export class SurfSceneManager {
     this.syncPostFxUniforms();
   }
 
+  private updateVictoryCutsceneCamera(rawDt: number) {
+    const kind = this.victoryCutsceneKind;
+    const totalDur = Math.max(0.1, this.victoryCutsceneDuration);
+    const p = THREE.MathUtils.clamp(this.victoryCutsceneTime / totalDur, 0, 1);
+    const smoothP = p * p * (3 - 2 * p);
+    const dir = this.victoryCutsceneSeed % 2 === 0 ? 1 : -1;
+
+    let targetFov = 40;
+    if (kind === 'championship_ceremony') {
+      this.victoryCeremony.getSurferAnchor(_vicPos);
+      this.victoryCeremony.getTrophyWorldPos(_vicTrophyPos);
+      const midX = (_vicPos.x + _vicTrophyPos.x) * 0.5;
+      const midY = _vicPos.y + 1.08;
+      const midZ = (_vicPos.z + _vicTrophyPos.z) * 0.5;
+
+      // Smoothly arc across the seaward side so sunlight lights surfer, surfboard & gold trophy
+      const arcAngle = THREE.MathUtils.lerp(-0.42 * dir, 0.36 * dir, smoothP);
+      const dist =
+        this.victoryCutsceneStage === 1
+          ? THREE.MathUtils.lerp(4.4, 3.25, this.victoryCutsceneStageProgress)
+          : this.victoryCutsceneStage === 2
+            ? THREE.MathUtils.lerp(3.25, 2.75, this.victoryCutsceneStageProgress)
+            : THREE.MathUtils.lerp(2.75, 3.9, this.victoryCutsceneStageProgress);
+
+      _cutCamPos.set(
+        midX + Math.sin(arcAngle) * dist,
+        midY + THREE.MathUtils.lerp(0.32, 0.14, smoothP),
+        midZ - Math.cos(arcAngle) * dist
+      );
+      _cutLookTarget.set(
+        this.victoryCutsceneStage === 2 ? _vicTrophyPos.x * 0.35 + midX * 0.65 : midX,
+        midY,
+        midZ
+      );
+      targetFov = this.victoryCutsceneStage === 2 ? 36 : 41;
+      const sandMinY = getBeachHeightAt(_cutCamPos.x, _cutCamPos.z) + 0.55;
+      _cutCamPos.y = Math.max(_cutCamPos.y, sandMinY);
+    } else {
+      const sp = _vicPos;
+      let dist = 2.85;
+      let camHeight = 1.25;
+      let orbitAng = -0.35 * dir;
+
+      if (kind === 'heat_win') {
+        dist = THREE.MathUtils.lerp(2.9, 2.3, smoothP);
+        camHeight = THREE.MathUtils.lerp(1.15, 1.32, smoothP);
+        orbitAng = THREE.MathUtils.lerp(-0.55 * dir, 0.35 * dir, smoothP);
+        targetFov = 37;
+      } else if (kind === 'quarterfinal_win') {
+        dist = THREE.MathUtils.lerp(3.45, 2.45, smoothP);
+        camHeight = THREE.MathUtils.lerp(0.95, 1.38, smoothP);
+        orbitAng = THREE.MathUtils.lerp(-0.75 * dir, 0.45 * dir, smoothP);
+        targetFov = THREE.MathUtils.lerp(42, 37, smoothP);
+      } else if (kind === 'semifinal_win') {
+        dist = THREE.MathUtils.lerp(3.85, 2.55, smoothP);
+        camHeight = THREE.MathUtils.lerp(1.05, 1.28, smoothP);
+        orbitAng = THREE.MathUtils.lerp(-1.05 * dir, 0.72 * dir, smoothP);
+        targetFov = THREE.MathUtils.lerp(44, 38, smoothP);
+      } else {
+        // 'final_win'
+        dist =
+          this.victoryCutsceneStage === 1
+            ? THREE.MathUtils.lerp(4.9, 3.6, this.victoryCutsceneStageProgress)
+            : THREE.MathUtils.lerp(3.6, 2.6, smoothP);
+        camHeight = THREE.MathUtils.lerp(1.45, 1.22, smoothP);
+        orbitAng = THREE.MathUtils.lerp(1.25 * dir, -0.38 * dir, smoothP);
+        targetFov = THREE.MathUtils.lerp(46, 38, smoothP);
+      }
+
+      _cutCamPos.set(
+        sp.x + Math.sin(orbitAng) * dist,
+        sp.y + camHeight,
+        sp.z - Math.cos(orbitAng) * dist
+      );
+      _cutLookTarget.set(sp.x, sp.y + 1.05, sp.z);
+      const safeMinY = this.getSafeCameraMinY(_cutCamPos.x, _cutCamPos.z, sp.x, sp.z, 0.72);
+      _cutCamPos.y = Math.max(_cutCamPos.y, safeMinY);
+    }
+
+    this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, _cutCamPos.x, 4.8, rawDt);
+    this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, _cutCamPos.y, 4.8, rawDt);
+    this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, _cutCamPos.z, 4.8, rawDt);
+    _tpCurPos.copy(this.camera.position);
+    _prevCamPos.copy(this.camera.position);
+
+    _currentLook.x = THREE.MathUtils.damp(_currentLook.x, _cutLookTarget.x, 5.6, rawDt);
+    _currentLook.y = THREE.MathUtils.damp(_currentLook.y, _cutLookTarget.y, 5.6, rawDt);
+    _currentLook.z = THREE.MathUtils.damp(_currentLook.z, _cutLookTarget.z, 5.6, rawDt);
+    this.camera.lookAt(_currentLook);
+
+    const nextFov = THREE.MathUtils.damp(this.camera.fov, targetFov, 4.2, rawDt);
+    if (Math.abs(nextFov - this.camera.fov) > 0.01) {
+      this.camera.fov = nextFov;
+      this.camera.updateProjectionMatrix();
+    }
+
+    this.currentBlur = THREE.MathUtils.damp(this.currentBlur, 0, 6, rawDt);
+    this.impactBlur = THREE.MathUtils.damp(this.impactBlur, 0, 6, rawDt);
+    this.lensDroplets = THREE.MathUtils.damp(this.lensDroplets, 0, 4, rawDt);
+    this.whitewaterWash = THREE.MathUtils.damp(this.whitewaterWash, 0, 6, rawDt);
+    this.underwaterBlend = THREE.MathUtils.damp(this.underwaterBlend, 0, 6, rawDt);
+    this.slowMoGray = THREE.MathUtils.damp(this.slowMoGray, 0, 7, rawDt);
+    this.syncPostFxUniforms();
+  }
+
   private updateSurfCamera(rawDt: number) {
+    if (this.victoryCutsceneActive) {
+      this.updateVictoryCutsceneCamera(rawDt);
+      return;
+    }
     if (this.cutsceneActive) {
       this.updateCutsceneCamera(rawDt);
       return;
@@ -2598,7 +3095,7 @@ export class SurfSceneManager {
         this.updateReplayPlayback(dt);
       } else {
         const isFrozenPause = this.screen === 'surfing' && this.paused;
-        if (this.screen === 'surfing') {
+        if (this.screen === 'surfing' || this.screen === 'interview') {
           this.renderer.shadowMap.autoUpdate = !isFrozenPause;
         } else {
           this.renderer.shadowMap.autoUpdate = false;
@@ -2616,6 +3113,23 @@ export class SurfSceneManager {
           }
         } else {
           this.elapsedTime += dt;
+          if (this.screen === 'interview') {
+            this.interviewStage.update(
+              this.elapsedTime,
+              dt,
+              this.interviewPhase,
+              this.interviewTone
+            );
+            this.surferRig.animateInterview(
+              this.interviewPhase,
+              this.interviewTone,
+              this.elapsedTime,
+              dt,
+              this.interviewStage.getSurferAnchor(_intvSurferPos),
+              -1.69,
+              this.interviewStage.getBoardAnchor(_intvBoardPos)
+            );
+          }
         }
 
         if (!isFrozenPause) {
@@ -2750,6 +3264,8 @@ export class SurfSceneManager {
     this.npcSurfers.dispose();
     this.waterParticles.dispose();
     this.rainSystem.dispose();
+    this.victoryCeremony.dispose();
+    this.interviewStage.dispose();
     this.sky.mesh.geometry.dispose();
     this.sky.material.dispose();
     this.ocean.mesh.geometry.dispose();

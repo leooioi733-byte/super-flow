@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Check, Download, Share2, WifiOff } from 'lucide-react';
-import { useOnlineStatus, usePWAInstall } from '../hooks/usePWAInstall';
+import { Check, CheckCircle2, Download, RefreshCw, Share2, WifiOff } from 'lucide-react';
+import { useOfflineCapability, useOnlineStatus, usePWAInstall } from '../hooks/usePWAInstall';
 
 interface PWAInstallButtonProps {
   variant?: 'topbar' | 'settings';
@@ -80,7 +80,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 't
   if (variant === 'settings') {
     return (
       <span className="text-right text-[11px] text-white/60">
-        Menu do Chrome (⋮) → Instalar app
+        Menu do navegador → Instalar app
       </span>
     );
   }
@@ -88,14 +88,49 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({ variant = 't
   return null;
 };
 
+export const OfflineCapabilityStatus: React.FC = () => {
+  const { offlineReady, needRefresh, isNativeShell, supportsServiceWorker, applyOfflineUpdate } =
+    useOfflineCapability();
+
+  if (needRefresh) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          void applyOfflineUpdate();
+        }}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-[#38d9c8]/55 bg-[#2596A6]/25 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[#2596A6]/45"
+      >
+        <RefreshCw className="h-3.5 w-3.5 text-[#38d9c8]" />
+        <span>Atualizar Cache Offline</span>
+      </button>
+    );
+  }
+
+  if (isNativeShell || offlineReady) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#38d9c8]">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        <span>{isNativeShell ? 'App nativo 100% offline' : 'Pronto para jogar sem internet'}</span>
+      </span>
+    );
+  }
+
+  return (
+    <span className="text-xs text-white/60">
+      {supportsServiceWorker ? 'Sincronizando arquivos offline...' : 'Armazenamento local ativo'}
+    </span>
+  );
+};
+
 export const OfflineIndicator: React.FC = () => {
   const isOnline = useOnlineStatus();
   if (isOnline) return null;
 
   return (
-    <div className="pointer-events-none fixed bottom-3 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-[#e68a5c]/45 bg-[#071726]/90 px-3 py-1.5 text-xs font-medium text-[#E7DCC8] shadow-lg">
-      <WifiOff className="h-3.5 w-3.5 text-[#e68a5c]" />
-      <span>Modo Offline — usando dados em cache</span>
+    <div className="pointer-events-none fixed bottom-3 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-[#38d9c8]/40 bg-[#071726]/92 px-3 py-1.5 text-xs font-medium text-[#E7DCC8] shadow-lg">
+      <WifiOff className="h-3.5 w-3.5 text-[#38d9c8]" />
+      <span>Modo Offline — jogo rodando localmente sem internet</span>
     </div>
   );
 };

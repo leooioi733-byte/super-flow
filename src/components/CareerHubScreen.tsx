@@ -15,6 +15,7 @@ import {
   Compass,
   Lock,
   Medal,
+  Mic,
   Minus,
   PlusCircle,
   Sun,
@@ -28,6 +29,7 @@ import {
   computeGlobalWorldRanking,
   computeTierStandings,
   getBrandById,
+  getSponsorRelationshipStatus,
   getTierOrderIndex,
   getTopRivalry,
   RankedCircuitEntry,
@@ -1243,13 +1245,36 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
         {/* TAB 4: SPONSORS */}
         {tab === 'patrocinios' && (
           <div className="space-y-5">
-            <div>
-              <h3 className="font-display text-lg font-bold text-white">
-                Patrocínios &amp; Contratos
-              </h3>
-              <p className="text-xs text-white/65">
-                Sua reputação atual (<span className="font-mono-tabular text-white">{career.reputation} pts</span>) e divisão determinam os convites de marcas.
-              </p>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="font-display text-lg font-bold text-white">
+                  Patrocínios &amp; Contratos
+                </h3>
+                <p className="text-xs text-white/65">
+                  Sua reputação atual (<span className="font-mono-tabular text-white">{career.reputation} pts</span>) e divisão determinam os convites de marcas.
+                </p>
+              </div>
+              {(() => {
+                const affinity = career.sponsorAffinity ?? 55;
+                const rel = getSponsorRelationshipStatus(affinity);
+                return (
+                  <div className="min-w-[230px] rounded-xl border border-white/12 bg-[#0B2338]/75 px-3.5 py-2.5 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-white/65">Relação com Marcas</span>
+                      <span className={`font-semibold ${rel.tierColor}`}>
+                        {rel.label} ({affinity}/100)
+                      </span>
+                    </div>
+                    <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-[#071726]">
+                      <div
+                        className="h-full rounded-full bg-[#2596A6] transition-all"
+                        style={{ width: `${Math.min(100, Math.max(0, affinity))}%` }}
+                      />
+                    </div>
+                    <p className="mt-1 text-[10px] text-white/55">{rel.summary}</p>
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
@@ -1751,6 +1776,65 @@ export const CareerHubScreen: React.FC<CareerHubScreenProps> = ({
                   </div>
                 </div>
               )}
+
+              <div className="rounded-xl border border-white/12 bg-[#0B2338]/60 p-5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Mic className="h-4 w-4 text-[#38d9c8]" />
+                    <h3 className="font-display text-base font-bold text-white">
+                      Histórico de Entrevistas &amp; Imprensa
+                    </h3>
+                  </div>
+                  <span className="font-mono-tabular text-xs text-white/55">
+                    {(career.interviewHistory ?? []).length} registro(s)
+                  </span>
+                </div>
+                {(career.interviewHistory ?? []).length === 0 ? (
+                  <p className="mt-2 text-xs text-white/60">
+                    Suas declarações pós-competição em grandes vitórias, notas 10, finais e reviravoltas aparecerão aqui.
+                  </p>
+                ) : (
+                  <div className="mt-3 max-h-64 space-y-2.5 overflow-y-auto pr-1">
+                    {(career.interviewHistory ?? []).map((entry) => {
+                      const toneBadge =
+                        entry.tone === 'humildade'
+                          ? { label: 'Humildade', cls: 'bg-[#38d9c8]/15 text-[#38d9c8]' }
+                          : entry.tone === 'confianca'
+                            ? { label: 'Confiança', cls: 'bg-[#f4c97a]/15 text-[#f4c97a]' }
+                            : { label: 'Provocação', cls: 'bg-[#e68a5c]/15 text-[#e68a5c]' };
+                      return (
+                        <div
+                          key={entry.id}
+                          className="rounded-lg border border-white/10 bg-[#071726]/55 p-3 text-xs"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="font-semibold text-white">
+                              {entry.eventName}{' '}
+                              <span className="font-normal text-white/55">
+                                · T{entry.season} · {entry.roundLabel}
+                              </span>
+                            </div>
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${toneBadge.cls}`}
+                            >
+                              {toneBadge.label}
+                            </span>
+                          </div>
+                          <p className="mt-1.5 text-[11px] leading-relaxed text-[#E7DCC8]/90 italic">
+                            {entry.answerText}
+                          </p>
+                          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-[10px] text-white/55">
+                            <span>{entry.journalistName}</span>
+                            <span className="font-medium text-[#38d9c8]">
+                              {entry.consequenceSummary}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
 
               <div className="rounded-xl border border-white/12 bg-[#0B2338]/60 p-5">
                 <h3 className="font-display text-base font-bold text-white">

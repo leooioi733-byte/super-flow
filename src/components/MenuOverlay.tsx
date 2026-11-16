@@ -44,7 +44,7 @@ import {
   isReservedControlKey,
   parseCrossDeviceImport,
 } from '../utils/pcSettings';
-import { PWAInstallButton } from './PWAInstallButton';
+import { OfflineCapabilityStatus, PWAInstallButton } from './PWAInstallButton';
 
 interface MenuOverlayProps {
   screen: MenuScreen;
@@ -974,6 +974,11 @@ export const MenuOverlay: React.FC<MenuOverlayProps> = ({
                     <div className="flex items-center justify-between gap-4 border-t border-white/10 pt-3">
                       <span className="text-sm text-white/90">Instalar no Dispositivo (PWA)</span>
                       <PWAInstallButton variant="settings" />
+                    </div>
+
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-sm text-white/90">Funcionamento Sem Internet</span>
+                      <OfflineCapabilityStatus />
                     </div>
                   </div>
                 </div>
